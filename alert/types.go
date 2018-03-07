@@ -70,6 +70,9 @@ type EventData struct {
 	// TaskName is the name of the task that generated this event.
 	TaskName string
 
+	// AlertName is the name of the alert that generated this event.
+	AlertName string
+
 	// Concatenation of all group-by tags of the form [key=value,]+.
 	// If not groupBy is performed equal to literal 'nil'
 	Group string

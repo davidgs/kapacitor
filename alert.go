@@ -68,6 +68,7 @@ type AlertNode struct {
 	warnsTriggered  *expvar.Int
 	critsTriggered  *expvar.Int
 	eventsDropped   *expvar.Int
+	alertsInhibited *expvar.Int
 
 	bufPool sync.Pool
 
@@ -515,6 +516,9 @@ func (n *AlertNode) runAlert([]byte) error {
 	n.eventsDropped = &expvar.Int{}
 	n.statMap.Set(statsCritsTriggered, n.critsTriggered)
 
+	n.alertsInhibited = &expvar.Int{}
+	n.statMap.Set(statsAlertsTriggered, n.alertsInhibited)
+
 	// Setup consumer
 	consumer := edge.NewGroupedConsumer(
 		n.ins[0],
@@ -543,7 +547,7 @@ func (n *AlertNode) NewGroup(group edge.GroupInfo, first edge.PointMeta) (edge.R
 	}
 	t := first.Time()
 
-	state := n.restoreEventState(id, t)
+	state := n.restoreEventState(id, t, group.Tags)
 
 	return edge.NewReceiverFromForwardReceiverWithStats(
 		n.outs,
@@ -554,8 +558,8 @@ func (n *AlertNode) NewGroup(group edge.GroupInfo, first edge.PointMeta) (edge.R
 	), nil
 }
 
-func (n *AlertNode) restoreEventState(id string, t time.Time) *alertState {
-	state := n.newAlertState()
+func (n *AlertNode) restoreEventState(id string, t time.Time, tags models.Tags) *alertState {
+	state := n.newAlertState(tags)
 	currentLevel, triggered := n.restoreEvent(id)
 	if currentLevel != alert.OK {
 		// Add initial event
@@ -566,11 +570,23 @@ func (n *AlertNode) restoreEventState(id string, t time.Time) *alertState {
 	return state
 }
 
-func (n *AlertNode) newAlertState() *alertState {
+func (n *AlertNode) newAlertState(tags models.Tags) *alertState {
+	inhibitors := make([]*alert.Inhibitor, len(n.a.Inhibitors))
+	for i, in := range n.a.Inhibitors {
+		tagset := make(models.Tags, len(in.EqualTags))
+		for _, t := range in.EqualTags {
+			tagset[t] = tags[t]
+		}
+
+		inhibitor := alert.NewInhibitor(in.Name, tagset)
+		inhibitors[i] = inhibitor
+		n.et.tm.AlertService.AddInhibitor(inhibitor)
+	}
 	return &alertState{
-		history: make([]alert.Level, n.a.History),
-		n:       n,
-		buffer:  new(edge.BatchBuffer),
+		history:    make([]alert.Level, n.a.History),
+		n:          n,
+		buffer:     new(edge.BatchBuffer),
+		inhibitors: inhibitors,
 	}
 }
 
@@ -630,6 +646,12 @@ func (n *AlertNode) hasTopic() bool {
 }
 
 func (n *AlertNode) handleEvent(event alert.Event) {
+	// Check if alert is inhibited
+	if n.et.tm.AlertService.IsInhibited(event.Data.AlertName, event.Data.Tags) {
+		n.alertsInhibited.Add(1)
+		return
+	}
+
 	n.alertsTriggered.Add(1)
 	switch event.State.Level {
 	case alert.OK:
@@ -725,12 +747,13 @@ func (n *AlertNode) event(
 			Level:    level,
 		},
 		Data: alert.EventData{
-			Name:     name,
-			TaskName: n.et.Task.ID,
-			Group:    string(group),
-			Tags:     tags,
-			Fields:   fields,
-			Result:   result,
+			Name:      name,
+			TaskName:  n.et.Task.ID,
+			AlertName: n.a.AlertName,
+			Group:     string(group),
+			Tags:      tags,
+			Fields:    fields,
+			Result:    result,
 		},
 	}
 	return event, nil
@@ -753,6 +776,8 @@ type alertState struct {
 	// Note: Alerts are not triggered for every event.
 	lastTriggered time.Time
 	expired       bool
+
+	inhibitors []*alert.Inhibitor
 }
 
 func (a *alertState) BeginBatch(begin edge.BeginBatchMessage) (edge.Message, error) {
@@ -942,6 +967,9 @@ func (a *alertState) Barrier(b edge.BarrierMessage) (edge.Message, error) {
 	return b, nil
 }
 func (a *alertState) DeleteGroup(d edge.DeleteGroupMessage) (edge.Message, error) {
+	for _, inhibitor := range a.inhibitors {
+		a.n.et.tm.AlertService.RemoveInhibitor(inhibitor)
+	}
 	return d, nil
 }
 
@@ -959,8 +987,12 @@ func (a *alertState) triggered(t time.Time) {
 	if p == -1 {
 		p = len(a.history) - 1
 	}
-	if a.history[p] == alert.OK {
+	ok := a.history[p] == alert.OK
+	if ok {
 		a.firstTriggered = t
+	}
+	for _, in := range a.inhibitors {
+		in.Set(!ok)
 	}
 }
 
@@ -975,6 +1007,7 @@ func (a *alertState) addEvent(t time.Time, level alert.Level) {
 
 	a.updateFlapping()
 	a.updateExpired(t)
+
 }
 
 // Return current level of this state

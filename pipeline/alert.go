@@ -127,6 +127,10 @@ type AlertNode struct{ *AlertNodeData }
 type AlertNodeData struct {
 	chainnode
 
+	// AlertName is a globally unique name for this alert.
+	// It must be unique across all tasks.
+	AlertName string `json:"alertName"`
+
 	// Topic specifies the name of an alert topic to which,
 	// alerts will be published.
 	// Alert handlers can be configured per topic, see the API documentation.
@@ -296,6 +300,10 @@ type AlertNodeData struct {
 	// Maximum interval to ignore non state changed events
 	// tick:ignore
 	StateChangesOnlyDuration time.Duration `json:"stateChangesOnlyDuration"`
+
+	// Inhibitors
+	// tick:ignore
+	Inhibitors []Inhibitor `tick:"Inhibit" json:"inhibitors"`
 
 	// Post the JSON alert data to the specified URL.
 	// tick:ignore
@@ -527,6 +535,23 @@ func (n *AlertNodeData) Flapping(low, high float64) *AlertNodeData {
 	n.FlapLow = low
 	n.FlapHigh = high
 	return n
+}
+
+// Inhibit other alerts by name and a list of tags keys that must be equal.
+// tick:property
+func (n *AlertNodeData) Inhibit(alertName string, equalTags ...string) *AlertNodeData {
+	n.Inhibitors = append(n.Inhibitors, Inhibitor{
+		Name:      alertName,
+		EqualTags: equalTags,
+	})
+	return n
+}
+
+// Inhibitor represents a single alert inhibitor
+// tick:ignore
+type Inhibitor struct {
+	Name      string
+	EqualTags []string
 }
 
 // HTTP POST JSON alert data to a specified URL.
