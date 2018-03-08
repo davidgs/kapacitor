@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/google/go-cmp/cmp"
 	iclient "github.com/influxdata/influxdb/client/v2"
 	"github.com/influxdata/influxdb/influxql"
 	imodels "github.com/influxdata/influxdb/models"
@@ -1350,7 +1351,7 @@ stream
 	}
 
 	updateTick := `var x = 5
-	
+
 	stream
 	    |from()
 	        .measurement('test')
@@ -1370,7 +1371,7 @@ stream
 	dbrp "telegraf"."not_autogen"
 
 	var x = 5
-	
+
 	stream
 	    |from()
 	        .measurement('test')
@@ -10394,6 +10395,457 @@ stream
 			t.Fatalf("expected error for deleted topic %q", topic)
 		}
 	}
+}
+func TestServer_Alert_Inhibition(t *testing.T) {
+	// Test Overview
+	// Create several alerts:
+	//  * cpu - alert on host cpu usage by region,host,cpu
+	//  * mem - alert on host mem usage by region,host
+	//  * host - alert on host up/down by region,host
+	//  * region - alert on region up/down by region
+	//
+	// The host alert will inhibit the cpu and mem alerts by host
+	// The region alert will inhibit the cpu mem and host alerts by region
+	//
+
+	// Create default config
+	c := NewConfig()
+	s := OpenServer(c)
+	cli := Client(s)
+	closed := false
+	defer func() {
+		if !closed {
+			s.Close()
+		}
+	}()
+
+	// Setup test TCP server
+	ts, err := alerttest.NewTCPServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	if _, err := cli.CreateTopicHandler(cli.TopicHandlersLink("inhibition"), client.TopicHandlerOptions{
+		ID:      "tcpHandler",
+		Kind:    "tcp",
+		Options: map[string]interface{}{"address": ts.Addr},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	memAlert := `
+stream
+	|from()
+		.measurement('mem')
+		.groupBy(*)
+	|alert()
+		.alertName('mem_alert')
+		.topic('inhibition')
+		.message('mem')
+		.details('')
+		.crit(lambda: "v")
+`
+	cpuAlert := `
+stream
+	|from()
+		.measurement('cpu')
+		.groupBy(*)
+	|alert()
+		.alertName('cpu_alert')
+		.topic('inhibition')
+		.message('cpu')
+		.details('')
+		.crit(lambda: "v")
+`
+	hostAlert := `
+stream
+	|from()
+		.measurement('host')
+		.groupBy(*)
+	|alert()
+		.alertName('host_alert')
+		.topic('inhibition')
+		.message('host')
+		.details('')
+		.crit(lambda: "v")
+		.inhibit('mem_alert', 'region', 'host')
+		.inhibit('cpu_alert', 'region', 'host')
+`
+	regionAlert := `
+stream
+	|from()
+		.measurement('region')
+		.groupBy(*)
+	|alert()
+		.alertName('region_alert')
+		.topic('inhibition')
+		.message('region')
+		.details('')
+		.crit(lambda: "v")
+		.inhibit('host_alert', 'region')
+		.inhibit('mem_alert', 'region')
+		.inhibit('cpu_alert', 'region')
+`
+
+	tasks := map[string]string{
+		"cpu":    cpuAlert,
+		"mem":    memAlert,
+		"host":   hostAlert,
+		"region": regionAlert,
+	}
+	for id, tick := range tasks {
+		if _, err := cli.CreateTask(client.CreateTaskOptions{
+			ID:   id,
+			Type: client.StreamTask,
+			DBRPs: []client.DBRP{{
+				Database:        "mydb",
+				RetentionPolicy: "myrp",
+			}},
+			TICKscript: tick,
+			Status:     client.Enabled,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	batches := []string{
+		//#0 Send initial batch with all alerts in the green state
+		`cpu,region=west,host=A,cpu=0 v=false 0
+cpu,region=west,host=A,cpu=1 v=false 0
+cpu,region=west,host=B,cpu=0 v=false 0
+cpu,region=west,host=B,cpu=1 v=false 0
+cpu,region=east,host=A,cpu=0 v=false 0
+cpu,region=east,host=A,cpu=1 v=false 0
+cpu,region=east,host=B,cpu=0 v=false 0
+cpu,region=east,host=B,cpu=1 v=false 0
+mem,region=west,host=A v=false 0
+mem,region=west,host=B v=false 0
+mem,region=east,host=A v=false 0
+mem,region=east,host=B v=false 0
+host,region=west,host=A v=false 0
+host,region=west,host=B v=false 0
+host,region=east,host=A v=false 0
+host,region=east,host=B v=false 0
+region,region=west v=false 0
+region,region=east v=false 0
+`,
+		//#1 Send batch where some mem and cpu alerts fire
+		`cpu,region=west,host=B,cpu=0 v=true 1
+cpu,region=east,host=A,cpu=1 v=true 1
+mem,region=west,host=B v=true 1
+mem,region=east,host=A v=true 1
+`,
+		//#2 Send batch where some host alerts fire
+		`host,region=west,host=B v=true 2
+host,region=east,host=B v=true 2
+`,
+		//#3 Send batch where some mem and cpu alerts fire
+		`cpu,region=west,host=B,cpu=0 v=true 3
+cpu,region=east,host=A,cpu=1 v=true 3
+mem,region=west,host=B v=true 3
+mem,region=east,host=A v=true 3
+`,
+		//#4 Send batch were hosts alerts recover
+		`host,region=west,host=B v=false 4
+host,region=east,host=B v=false 4
+`,
+		//#5 Send batch where some mem and cpu alerts fire
+		`cpu,region=west,host=B,cpu=0 v=true 5
+cpu,region=east,host=A,cpu=1 v=true 5
+mem,region=west,host=B v=true 5
+mem,region=east,host=A v=true 5
+`,
+		//#6 Send batch where region alert fires
+		`region,region=east v=true 6`,
+
+		//#7 Send batch where some mem, cpu and host alerts fire
+		`cpu,region=west,host=B,cpu=0 v=true 7
+cpu,region=east,host=A,cpu=1 v=true 7
+mem,region=west,host=B v=true 7
+mem,region=east,host=A v=true 7
+host,region=west,host=A v=true 7
+host,region=east,host=B v=true 7
+`,
+		//#8 Send batch where region alert recovers
+		`region,region=east v=false 8`,
+
+		//#9 Send batch where some mem, cpu and host alerts fire
+		`cpu,region=west,host=B,cpu=0 v=true 9
+cpu,region=east,host=A,cpu=1 v=true 9
+mem,region=west,host=B v=true 9
+mem,region=east,host=A v=true 9
+host,region=west,host=A v=true 9
+host,region=east,host=B v=true 9
+`,
+	}
+
+	v := url.Values{}
+	v.Add("precision", "s")
+	for _, p := range batches {
+		s.MustWrite("mydb", "myrp", p, v)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Close the entire server to ensure all data is processed
+	s.Close()
+	closed = true
+
+	want := []alert.Data{
+		// #1
+
+		{
+			ID:            "cpu:cpu=0,host=B,region=west",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+		{
+			ID:            "cpu:cpu=1,host=A,region=east",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+		{
+			ID:            "mem:host=A,region=east",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+		{
+			ID:            "mem:host=B,region=west",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+
+		// #2
+
+		{
+			ID:            "host:host=B,region=east",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 2, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+		{
+			ID:            "host:host=B,region=west",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 2, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+
+		// #3
+
+		{
+			ID:            "cpu:cpu=1,host=A,region=east",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 3, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+		{
+			ID:            "mem:host=A,region=east",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 3, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+
+		// #4
+
+		{
+			ID:            "host:host=B,region=east",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 4, 0, time.UTC),
+			Level:         alert.OK,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+		{
+			ID:            "host:host=B,region=west",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 4, 0, time.UTC),
+			Level:         alert.OK,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+
+		// #5
+
+		{
+			ID:            "cpu:cpu=0,host=B,region=west",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 5, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      4 * time.Second,
+		},
+		{
+			ID:            "cpu:cpu=1,host=A,region=east",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 5, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      4 * time.Second,
+		},
+		{
+			ID:            "mem:host=A,region=east",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 5, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      4 * time.Second,
+		},
+		{
+			ID:            "mem:host=B,region=west",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 5, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      4 * time.Second,
+		},
+
+		// #6
+
+		{
+			ID:            "region:region=east",
+			Message:       "region",
+			Time:          time.Date(1970, 1, 1, 0, 0, 6, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+
+		// #7
+		{
+			ID:            "cpu:cpu=0,host=B,region=west",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 7, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      6 * time.Second,
+		},
+		{
+			ID:            "host:host=A,region=west",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 7, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      0,
+		},
+		{
+			ID:            "mem:host=B,region=west",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 7, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      6 * time.Second,
+		},
+
+		// #8
+
+		{
+			ID:            "region:region=east",
+			Message:       "region",
+			Time:          time.Date(1970, 1, 1, 0, 0, 8, 0, time.UTC),
+			Level:         alert.OK,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+
+		// #9
+
+		{
+			ID:            "cpu:cpu=0,host=B,region=west",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      8 * time.Second,
+		},
+		{
+			ID:            "cpu:cpu=1,host=A,region=east",
+			Message:       "cpu",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      8 * time.Second,
+		},
+		{
+			ID:            "host:host=A,region=west",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      2 * time.Second,
+		},
+		{
+			ID:            "host:host=B,region=east",
+			Message:       "host",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.OK,
+			Duration:      2 * time.Second,
+		},
+		{
+			ID:            "mem:host=A,region=east",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      8 * time.Second,
+		},
+		{
+			ID:            "mem:host=B,region=west",
+			Message:       "mem",
+			Time:          time.Date(1970, 1, 1, 0, 0, 9, 0, time.UTC),
+			Level:         alert.Critical,
+			PreviousLevel: alert.Critical,
+			Duration:      8 * time.Second,
+		},
+	}
+	ts.Close()
+	got := ts.Data()
+	// Remove the .Data result from the alerts
+	for i := range got {
+		got[i].Data = models.Result{}
+	}
+	// Sort results since order doesn't matter
+	//sort.Slice(want, func(i, j int) bool {
+	//	if want[i].Time.Equal(want[j].Time) {
+	//		return want[i].ID < want[j].ID
+	//	}
+	//	return want[i].Time.Before(want[j].Time)
+	//})
+	sort.Slice(got, func(i, j int) bool {
+		if got[i].Time.Equal(got[j].Time) {
+			return got[i].ID < got[j].ID
+		}
+		return got[i].Time.Before(got[j].Time)
+	})
+	t.Logf("want: %d got: %d", len(want), len(got))
+	if !cmp.Equal(got, want) {
+		t.Errorf("unexpected alert during inhibited run -want/+got\n%s", cmp.Diff(want, got))
+	}
+	//for i := range want {
+	//	if !cmp.Equal(got[i], want[i]) {
+	//		t.Errorf("unexpected alert during inhibited run -want/+got\n%s", cmp.Diff(want[i], got[i]))
+	//	}
+	//}
 }
 
 func TestServer_AlertListHandlers(t *testing.T) {

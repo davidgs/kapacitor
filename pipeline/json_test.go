@@ -3,7 +3,6 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -189,6 +188,7 @@ func TestPipeline_MarshalJSON(t *testing.T) {
         {
             "typeOf": "alert",
             "id": "3",
+            "alertName": "",
             "topic": "",
             "alertId": "Ruley McRuleface:{{.Group}}",
             "message": " {{.ID}} is  {{.Level}}",
@@ -231,6 +231,7 @@ func TestPipeline_MarshalJSON(t *testing.T) {
             "noRecoveries": false,
             "stateChangesOnly": true,
             "stateChangesOnlyDuration": 0,
+            "inhibitors": null,
             "post": [
                 {
                     "url": "http://howdy.local",
@@ -321,8 +322,7 @@ func TestPipeline_MarshalJSON(t *testing.T) {
 				return
 			}
 			if string(got) != tt.want {
-				fmt.Println(string(got))
-				t.Errorf("Pipeline.MarshalJSON() = %v, want %v", string(got), tt.want)
+				t.Errorf("Pipeline.MarshalJSON()\ngot:\n%v\nwant:\n%v\n", string(got), tt.want)
 			}
 		})
 	}

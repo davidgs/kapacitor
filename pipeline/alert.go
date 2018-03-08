@@ -550,8 +550,8 @@ func (n *AlertNodeData) Inhibit(alertName string, equalTags ...string) *AlertNod
 // Inhibitor represents a single alert inhibitor
 // tick:ignore
 type Inhibitor struct {
-	Name      string
-	EqualTags []string
+	Name      string   `json:"name"`
+	EqualTags []string `json:"equalTags"`
 }
 
 // HTTP POST JSON alert data to a specified URL.

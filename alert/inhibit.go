@@ -42,9 +42,7 @@ func (l *InhibitorLookup) RemoveInhibitor(in *Inhibitor) {
 	inhibitors := l.inhibitors[in.name]
 	for i := range inhibitors {
 		if inhibitors[i] == in {
-			inhibitors = inhibitors[:i]
-			inhibitors = append(inhibitors, inhibitors[i+1:]...)
-			l.inhibitors[in.name] = inhibitors
+			l.inhibitors[in.name] = append(inhibitors[:i], inhibitors[i+1:]...)
 			break
 		}
 	}

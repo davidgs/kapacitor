@@ -37,6 +37,7 @@ import (
 
 const (
 	statsAlertsTriggered = "alerts_triggered"
+	statsAlertsInhibited = "alerts_inhibited"
 	statsOKsTriggered    = "oks_triggered"
 	statsInfosTriggered  = "infos_triggered"
 	statsWarnsTriggered  = "warns_triggered"
@@ -63,12 +64,12 @@ type AlertNode struct {
 	detailsTmpl *html.Template
 
 	alertsTriggered *expvar.Int
+	alertsInhibited *expvar.Int
 	oksTriggered    *expvar.Int
 	infosTriggered  *expvar.Int
 	warnsTriggered  *expvar.Int
 	critsTriggered  *expvar.Int
 	eventsDropped   *expvar.Int
-	alertsInhibited *expvar.Int
 
 	bufPool sync.Pool
 
@@ -501,6 +502,9 @@ func (n *AlertNode) runAlert([]byte) error {
 	n.alertsTriggered = &expvar.Int{}
 	n.statMap.Set(statsAlertsTriggered, n.alertsTriggered)
 
+	n.alertsInhibited = &expvar.Int{}
+	n.statMap.Set(statsAlertsInhibited, n.alertsInhibited)
+
 	n.oksTriggered = &expvar.Int{}
 	n.statMap.Set(statsOKsTriggered, n.oksTriggered)
 
@@ -515,9 +519,6 @@ func (n *AlertNode) runAlert([]byte) error {
 
 	n.eventsDropped = &expvar.Int{}
 	n.statMap.Set(statsCritsTriggered, n.critsTriggered)
-
-	n.alertsInhibited = &expvar.Int{}
-	n.statMap.Set(statsAlertsTriggered, n.alertsInhibited)
 
 	// Setup consumer
 	consumer := edge.NewGroupedConsumer(
@@ -537,6 +538,7 @@ func (n *AlertNode) runAlert([]byte) error {
 	for _, h := range n.handlers {
 		n.et.tm.AlertService.DeregisterAnonHandler(n.anonTopic, h)
 	}
+
 	return nil
 }
 
@@ -966,11 +968,14 @@ func (a *alertState) augmentFieldsWithEventState(p edge.FieldSetter, eventState 
 func (a *alertState) Barrier(b edge.BarrierMessage) (edge.Message, error) {
 	return b, nil
 }
+
 func (a *alertState) DeleteGroup(d edge.DeleteGroupMessage) (edge.Message, error) {
+	return d, nil
+}
+func (a *alertState) Done() {
 	for _, inhibitor := range a.inhibitors {
 		a.n.et.tm.AlertService.RemoveInhibitor(inhibitor)
 	}
-	return d, nil
 }
 
 // Return the duration of the current alert state.
@@ -987,12 +992,14 @@ func (a *alertState) triggered(t time.Time) {
 	if p == -1 {
 		p = len(a.history) - 1
 	}
-	ok := a.history[p] == alert.OK
-	if ok {
+	if a.history[p] == alert.OK {
 		a.firstTriggered = t
 	}
+
+	// Update inhibitor state
+	inhibited := a.history[a.idx] != alert.OK
 	for _, in := range a.inhibitors {
-		in.Set(!ok)
+		in.Set(inhibited)
 	}
 }
 
