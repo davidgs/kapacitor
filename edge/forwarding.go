@@ -10,6 +10,7 @@ type ForwardReceiver interface {
 	Barrier(b BarrierMessage) (Message, error)
 	DeleteGroup(d DeleteGroupMessage) (Message, error)
 
+	// Done is called once the receiver will no longer receive any messages.
 	Done()
 }
 

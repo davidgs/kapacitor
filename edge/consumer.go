@@ -20,6 +20,7 @@ type Receiver interface {
 	Barrier(b BarrierMessage) error
 	DeleteGroup(d DeleteGroupMessage) error
 
+	// Done is called once the receiver will no longer receive any messages.
 	Done()
 }
 
