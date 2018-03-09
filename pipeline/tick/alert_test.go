@@ -47,7 +47,7 @@ func TestAlert(t *testing.T) {
 	alert.IdTag = "idTag"
 	alert.IdField = "idField"
 	alert.All().NoRecoveries().StateChangesOnly(time.Hour)
-	alert.Inhibitors = []pipeline.Inhibitor{{Name: "other", EqualTags: []string{"t1", "t2"}}}
+	alert.Inhibitors = []pipeline.Inhibitor{{Category: "other", EqualTags: []string{"t1", "t2"}}}
 
 	want := `stream
     |from()

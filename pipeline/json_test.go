@@ -188,7 +188,7 @@ func TestPipeline_MarshalJSON(t *testing.T) {
         {
             "typeOf": "alert",
             "id": "3",
-            "alertName": "",
+            "category": "",
             "topic": "",
             "alertId": "Ruley McRuleface:{{.Group}}",
             "message": " {{.ID}} is  {{.Level}}",

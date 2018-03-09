@@ -46,7 +46,7 @@ func (n *AlertNode) Build(a *pipeline.AlertNode) (ast.Node, error) {
 
 	for _, in := range a.Inhibitors {
 		args := make([]interface{}, len(in.EqualTags)+1)
-		args[0] = in.Name
+		args[0] = in.Category
 		for i, t := range in.EqualTags {
 			args[i+1] = t
 		}

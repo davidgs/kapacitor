@@ -10440,7 +10440,7 @@ stream
 		.measurement('mem')
 		.groupBy(*)
 	|alert()
-		.alertName('mem_alert')
+		.category('system')
 		.topic('inhibition')
 		.message('mem')
 		.details('')
@@ -10452,7 +10452,7 @@ stream
 		.measurement('cpu')
 		.groupBy(*)
 	|alert()
-		.alertName('cpu_alert')
+		.category('system')
 		.topic('inhibition')
 		.message('cpu')
 		.details('')
@@ -10464,13 +10464,12 @@ stream
 		.measurement('host')
 		.groupBy(*)
 	|alert()
-		.alertName('host_alert')
+		.category('host_alert')
 		.topic('inhibition')
 		.message('host')
 		.details('')
 		.crit(lambda: "v")
-		.inhibit('mem_alert', 'region', 'host')
-		.inhibit('cpu_alert', 'region', 'host')
+		.inhibit('system', 'region', 'host')
 `
 	regionAlert := `
 stream
@@ -10478,14 +10477,13 @@ stream
 		.measurement('region')
 		.groupBy(*)
 	|alert()
-		.alertName('region_alert')
+		.category('region_alert')
 		.topic('inhibition')
 		.message('region')
 		.details('')
 		.crit(lambda: "v")
 		.inhibit('host_alert', 'region')
-		.inhibit('mem_alert', 'region')
-		.inhibit('cpu_alert', 'region')
+		.inhibit('system', 'region')
 `
 
 	tasks := map[string]string{

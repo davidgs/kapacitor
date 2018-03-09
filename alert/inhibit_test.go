@@ -9,7 +9,7 @@ import (
 
 func TestInhibitor_IsInhibited(t *testing.T) {
 	testCases := []struct {
-		name      string
+		category  string
 		inhibitor *alert.Inhibitor
 		inhibited bool
 		alertName string
@@ -17,7 +17,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 		want      bool
 	}{
 		{
-			name:      "exact match",
+			category:  "exact match",
 			inhibitor: alert.NewInhibitor("alert", models.Tags{"a": "x"}),
 			inhibited: true,
 			alertName: "alert",
@@ -25,7 +25,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "not inhibited",
+			category:  "not inhibited",
 			inhibitor: alert.NewInhibitor("alert", models.Tags{"a": "x"}),
 			inhibited: false,
 			alertName: "alert",
@@ -33,7 +33,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 			want:      false,
 		},
 		{
-			name:      "not name match",
+			category:  "not category match",
 			inhibitor: alert.NewInhibitor("alert", models.Tags{"a": "x"}),
 			inhibited: true,
 			alertName: "foo",
@@ -41,7 +41,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 			want:      false,
 		},
 		{
-			name:      "not tag match",
+			category:  "not tag match",
 			inhibitor: alert.NewInhibitor("alert", models.Tags{"a": "x"}),
 			inhibited: true,
 			alertName: "alert",
@@ -49,7 +49,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 			want:      false,
 		},
 		{
-			name:      "match with extra tags",
+			category:  "match with extra tags",
 			inhibitor: alert.NewInhibitor("alert", models.Tags{"a": "x"}),
 			inhibited: true,
 			alertName: "alert",
@@ -60,7 +60,7 @@ func TestInhibitor_IsInhibited(t *testing.T) {
 
 	for _, tc := range testCases {
 		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.category, func(t *testing.T) {
 			tc.inhibitor.Set(tc.inhibited)
 			got := tc.inhibitor.IsInhibited(tc.alertName, tc.tags)
 			if tc.want != got {

@@ -26,7 +26,7 @@ func TestAlertNode_MarshalJSON(t *testing.T) {
 			want: `{
     "typeOf": "alert",
     "id": "0",
-    "alertName": "",
+    "category": "",
     "topic": "",
     "alertId": "",
     "message": "",

@@ -580,7 +580,7 @@ func (n *AlertNode) newAlertState(tags models.Tags) *alertState {
 			tagset[t] = tags[t]
 		}
 
-		inhibitor := alert.NewInhibitor(in.Name, tagset)
+		inhibitor := alert.NewInhibitor(in.Category, tagset)
 		inhibitors[i] = inhibitor
 		n.et.tm.AlertService.AddInhibitor(inhibitor)
 	}
@@ -649,7 +649,7 @@ func (n *AlertNode) hasTopic() bool {
 
 func (n *AlertNode) handleEvent(event alert.Event) {
 	// Check if alert is inhibited
-	if n.et.tm.AlertService.IsInhibited(event.Data.AlertName, event.Data.Tags) {
+	if n.et.tm.AlertService.IsInhibited(event.Data.Category, event.Data.Tags) {
 		n.alertsInhibited.Add(1)
 		return
 	}
@@ -749,13 +749,13 @@ func (n *AlertNode) event(
 			Level:    level,
 		},
 		Data: alert.EventData{
-			Name:      name,
-			TaskName:  n.et.Task.ID,
-			AlertName: n.a.AlertName,
-			Group:     string(group),
-			Tags:      tags,
-			Fields:    fields,
-			Result:    result,
+			Name:     name,
+			TaskName: n.et.Task.ID,
+			Category: n.a.Category,
+			Group:    string(group),
+			Tags:     tags,
+			Fields:   fields,
+			Result:   result,
 		},
 	}
 	return event, nil

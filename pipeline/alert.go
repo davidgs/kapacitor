@@ -127,9 +127,9 @@ type AlertNode struct{ *AlertNodeData }
 type AlertNodeData struct {
 	chainnode
 
-	// AlertName is a globally unique name for this alert.
-	// It must be unique across all tasks.
-	AlertName string `json:"alertName"`
+	// Category places this alert in a named category.
+	// Categories are used to inhibit alerts.
+	Category string `json:"category"`
 
 	// Topic specifies the name of an alert topic to which,
 	// alerts will be published.
@@ -537,11 +537,12 @@ func (n *AlertNodeData) Flapping(low, high float64) *AlertNodeData {
 	return n
 }
 
-// Inhibit other alerts by name and a list of tags keys that must be equal.
+// Inhibit other alerts in a category.
+// The equal tags provides a list of tags that must be equal in order for an alert event to be inhibited.
 // tick:property
-func (n *AlertNodeData) Inhibit(alertName string, equalTags ...string) *AlertNodeData {
+func (n *AlertNodeData) Inhibit(category string, equalTags ...string) *AlertNodeData {
 	n.Inhibitors = append(n.Inhibitors, Inhibitor{
-		Name:      alertName,
+		Category:  category,
 		EqualTags: equalTags,
 	})
 	return n
@@ -550,7 +551,7 @@ func (n *AlertNodeData) Inhibit(alertName string, equalTags ...string) *AlertNod
 // Inhibitor represents a single alert inhibitor
 // tick:ignore
 type Inhibitor struct {
-	Name      string   `json:"name"`
+	Category  string   `json:"category"`
 	EqualTags []string `json:"equalTags"`
 }
 

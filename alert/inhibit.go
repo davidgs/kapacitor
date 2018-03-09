@@ -18,11 +18,11 @@ func NewInhibitorLookup() *InhibitorLookup {
 	}
 }
 
-func (l *InhibitorLookup) IsInhibited(name string, tags models.Tags) bool {
+func (l *InhibitorLookup) IsInhibited(category string, tags models.Tags) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	for _, i := range l.inhibitors[name] {
-		if i.IsInhibited(name, tags) {
+	for _, i := range l.inhibitors[category] {
+		if i.IsInhibited(category, tags) {
 			return true
 		}
 	}
@@ -32,32 +32,32 @@ func (l *InhibitorLookup) IsInhibited(name string, tags models.Tags) bool {
 func (l *InhibitorLookup) AddInhibitor(in *Inhibitor) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.inhibitors[in.name] = append(l.inhibitors[in.name], in)
+	l.inhibitors[in.category] = append(l.inhibitors[in.category], in)
 }
 
 func (l *InhibitorLookup) RemoveInhibitor(in *Inhibitor) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	inhibitors := l.inhibitors[in.name]
+	inhibitors := l.inhibitors[in.category]
 	for i := range inhibitors {
 		if inhibitors[i] == in {
-			l.inhibitors[in.name] = append(inhibitors[:i], inhibitors[i+1:]...)
+			l.inhibitors[in.category] = append(inhibitors[:i], inhibitors[i+1:]...)
 			break
 		}
 	}
 }
 
-// Inhibitor tracks whether and alert + tag set have been inhibited
+// Inhibitor tracks whether an alert category + tag set have been inhibited
 type Inhibitor struct {
-	name      string
+	category  string
 	tags      models.Tags
 	inhibited int32
 }
 
-func NewInhibitor(name string, tags models.Tags) *Inhibitor {
+func NewInhibitor(category string, tags models.Tags) *Inhibitor {
 	return &Inhibitor{
-		name:      name,
+		category:  category,
 		tags:      tags,
 		inhibited: 0,
 	}
@@ -71,15 +71,15 @@ func (i *Inhibitor) Set(inhibited bool) {
 	atomic.StoreInt32(&i.inhibited, v)
 }
 
-func (i *Inhibitor) IsInhibited(name string, tags models.Tags) bool {
+func (i *Inhibitor) IsInhibited(category string, tags models.Tags) bool {
 	if atomic.LoadInt32(&i.inhibited) == 0 {
 		return false
 	}
-	return i.isMatch(name, tags)
+	return i.isMatch(category, tags)
 }
 
-func (i *Inhibitor) isMatch(name string, tags models.Tags) bool {
-	if name != i.name {
+func (i *Inhibitor) isMatch(category string, tags models.Tags) bool {
+	if category != i.category {
 		return false
 	}
 	for k, v := range i.tags {
